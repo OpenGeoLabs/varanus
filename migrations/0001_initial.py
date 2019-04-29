@@ -3,7 +3,7 @@
 import django.contrib.gis.db.models.fields
 from django.db import migrations, models
 import django.db.models.deletion
-import satellite.models
+import varanus.models
 
 
 class Migration(migrations.Migration):
@@ -64,14 +64,16 @@ class Migration(migrations.Migration):
             fields=[
                 ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('date', models.DateField()),
-                ('red', models.FileField(upload_to=satellite.models.call_week_upload_to)),
-                ('green', models.FileField(upload_to=satellite.models.call_week_upload_to)),
-                ('blue', models.FileField(upload_to=satellite.models.call_week_upload_to)),
-                ('nir', models.FileField(upload_to=satellite.models.call_week_upload_to)),
-                ('ndvi', models.FileField(upload_to=satellite.models.call_week_upload_to)),
-                ('ndwi', models.FileField(upload_to=satellite.models.call_week_upload_to)),
-                ('area', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='satellite.Area')),
-                ('satellite_image', models.ManyToManyField(to='satellite.SatelliteImage')),
+                ('red', models.FileField(upload_to=varanus.models.call_week_upload_to)),
+                ('green', models.FileField(upload_to=varanus.models.call_week_upload_to)),
+                ('blue', models.FileField(upload_to=varanus.models.call_week_upload_to)),
+                ('nir', models.FileField(upload_to=varanus.models.call_week_upload_to)),
+                ('ndvi', models.FileField(upload_to=varanus.models.call_week_upload_to)),
+                ('ndwi', models.FileField(upload_to=varanus.models.call_week_upload_to)),
+                ('area',
+                 models.ForeignKey(on_delete=django.db.models.deletion.CASCADE,
+                                   to='varanus.Area')),
+                ('satellite_image', models.ManyToManyField(to='varanus.SatelliteImage')),
             ],
         ),
     ]

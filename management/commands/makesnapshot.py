@@ -1,74 +1,109 @@
 from django.core.management.base import BaseCommand, CommandError
-from satellite.models import SatelliteImage,  Area, Week
+from django.contrib.gis.gdal import GDALRaster
+from django.core.files import File
+
+from varanus.models import SatelliteImage,  Area, Week
 
 from sentinelsat.sentinel import SentinelAPI, read_geojson, geojson_to_wkt
-from datetime import date, timedelta
+
+import datetime
 import tempfile
 from zipfile import ZipFile
 import os
-from shapely.geometry import shape, mapping
-from shapely.ops import unary_union
-from osgeo import gdal, ogr
 import json
-import fiona.transform
 import subprocess
 import sys
-sys.path.append("/home/jachym/venvs/lifemonitor/bin/")
-import gdal_merge as gm
-import rasterio as rio
 import copy
-from rasterio.windows import Window
-from django.contrib.gis.gdal import GDALRaster
-from django.core.files import File
 import shutil
+
+from shapely.geometry import shape, mapping
+from shapely.ops import unary_union
 import shapely.wkt
 from shapely.geometry import MultiPolygon
+import fiona.transform
+from osgeo import gdal, ogr
+import rasterio as rio
+from rasterio.windows import Window
+
+sys.path.append("/home/jachym/venvs/lifemonitor/bin/")
+import gdal_merge as gm
 
 PERIOD=6
 
+
 class Command(BaseCommand):
-    help = 'Download data'
+    help = 'Download and process data'
 
     def add_arguments(self, parser):
-        parser.add_argument('--user', required=True, type=str)
-        parser.add_argument('--password', required=True, type=str)
-        parser.add_argument('--date', required=True, type=str)
-        parser.add_argument('--area', required=True, type=str)
-        parser.add_argument('--clouds', required=True, type=float)
+        parser.description = """Download and process satellite data for given
+        time period."""
+        parser.description = """
+        User has to setup username and password for scihub.copernicus.eu
+        service.
+
+        Either --year and --week or --date has to be specified.
+        """
+        parser.add_argument('--user', required=True, type=str,
+                           help="Copernicus SciHub user name")
+        parser.add_argument('--password', required=True, type=str,
+                           help="Copernicus SciHub user password")
+        parser.add_argument('--date', required=False, type=str,
+                           help="""Any day within required week in format
+                            YYYYMMDD""")
+        parser.add_argument('--week', required=False, type=str,
+                            help="Number of week in required year")
+        parser.add_argument('--year', required=False, type=str)
+        parser.add_argument('--area', required=True, type=str,
+                           help="Area name or id")
+        parser.add_argument('--clouds', required=True, type=float,
+                           help="Cloud coverage")
+
 
     def handle(self, *args, **options):
+        """
+        main method
+        """
+
         user = options['user']
         passw = options['password']
-        mydate = int(options['date'])
-        area = options['area']
+        required_date = required_week = required_year = required_date = 0
+        if options['date']:
+            required_date = int(options['date'])
+        if options['week']:
+            required_week = int(options['week'])
+        if options['year']:
+            required_year = int(options['year'])
+        area_name = options['area']
         clouds = options['clouds']
 
-        area = Area.objects.get(name=area)
+        self.api = SentinelAPI(user, passw, 'https://scihub.copernicus.eu/dhus')
 
-        api = SentinelAPI(user, passw, 'https://scihub.copernicus.eu/dhus')
+        self.tempdir = tempfile.mkdtemp()
 
+        try:
+            self.area = Area.objects.get(id=int(area_name))
+        except:
+            try:
+                self.area = Area.objects.get(name=area_name)
+            except:
+                self.stdout.write(
+                    self.style.ERROR('Given area <{}> does not exist'.format(area_name)))
+                sys.exit(1)
 
-        strmydate = str(mydate)
-        enddate = date(int(strmydate[0:4]), int(strmydate[4:6]), int(strmydate[6:8]))
-        startdate = enddate - timedelta(days=PERIOD)
-        products = api.query(area.area.wkt,
-                     date = (startdate, enddate),
-                     platformname = 'Sentinel-2',
-                     cloudcoverpercentage = (0, clouds),
-                     producttype="S2MSI2A")
+        (starting_date, end_date, week_nr) = self._get_dates(required_year,
+                                                             required_week,
+                                                             required_date)
 
-        tempdir = tempfile.mkdtemp()
-        #tempdir = "/home/jachym/data/opengeolabs/lifemonitor/tmpxq6rx00w/"
-        #tempdir = "/home/jachym/data/opengeolabs/lifemonitor/0days/"
-        #tempdir = "/home/jachym/data/opengeolabs/lifemonitor/6days/"
-        #tempdir = "/home/jachym/data/opengeolabs/lifemonitor/14days/"
-        #tempdir = "/home/jachym/data/opengeolabs/lifemonitor/21days/"
-        #tempdir = "/tmp/tmpodaogqzc"
+        products = self.get_products(starting_date, end_date, self.area,
+                                     clouds=clouds)
+
+        print(products)
+        return
 
         products_bands = {}
         if len(products):
             print(products.keys())
-            api.download_all(products, tempdir)
+            self.api.download_all(products, tempdir)
             for product in products:
                 image = self._get_satellite_image(products[product])
                 #for k in products[product]:
@@ -103,7 +138,7 @@ class Command(BaseCommand):
         analysis = self._analyse(tempdir, resulting_bands)
 
         mydate = str(mydate)
-        week_date = date(int(mydate[0:4]), int(mydate[4:6]), int(mydate[6:8]))
+        week_date = datetime.date(int(mydate[0:4]), int(mydate[4:6]), int(mydate[6:8]))
         if Week.objects.filter(date=week_date, area=area).count() == 0:
             week = Week(
                 date=week_date,
@@ -306,4 +341,60 @@ class Command(BaseCommand):
             )
 
         return bandnames
+
+
+    def _get_dates(self, year=None, week=None, date=None):
+        """
+        :param year: required year
+        :param week: required week
+        :param date: date as integer
+
+        :return: (start_date, end_date, week_number)
+        """
+
+        week_number = None
+        start_date = None
+        end_date = None
+
+        date = int(date)
+        if date < 10000000:
+                self.stdout.write(
+                    self.style.ERROR('Date <{}> is not in required format YYYYMMDD'.format(date)))
+                sys.exit(1)
+
+        if date:
+            year = date//10000
+            month = (date - (year*10000))//100
+            day = (date - year*10000 - month*100)
+            date = datetime.datetime(year, month, day)
+            year, week, weekday = date.isocalendar()
+            firstday = datetime.timedelta(days=weekday-1)
+            lastday = datetime.timedelta(days=PERIOD - weekday)
+            start_date = date - firstday
+            end_date = date + lastday
+        else:
+           first_day_in_year = datetime.date(year, 1, 1) 
+           first_day_in_week = datetime.timedelta(days=(week-1)*7)
+           last_day_in_week = datetime.timedelta(days=PERIOD)
+           start_date = first_day_in_year+first_day_in_week
+           end_date = start_date+last_day_in_week
+
+        return(start_date, end_date, week)
+
+
+    def get_products(self, start_date, end_date, area, clouds=100):
+        """
+        :param start_date: starting date object
+        :param end_date: end date object
+        :param area: required area object
+        """
+
+        products = self.api.query(area.area.wkt,
+                     date = (start_date, end_date),
+                     platformname = 'Sentinel-2',
+                     cloudcoverpercentage = (0, clouds),
+                     producttype="S2MSI2A")
+
+        return products
+
 

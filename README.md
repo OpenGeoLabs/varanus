@@ -55,6 +55,9 @@ This is Python-[Django](https://django.org) application.
 4. Make sure, you are using spatially-enabled database backend, that means,
    either [Spatialite](https://docs.djangoproject.com/en/2.2/ref/contrib/gis/install/spatialite/) or [PostgreSQL with PostGIS](https://docs.djangoproject.com/en/2.2/ref/contrib/gis/install/postgis/)
 
+5. `python3 manage.py migrate`
+6. You have to get username and password for [Copernicus SciHub](https://scihub.copernicus.eu/)
+
 This was tested on Linux. May all your gods be with you, if you are trying to
 use this on other platforms.
 
