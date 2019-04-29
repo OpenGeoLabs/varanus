@@ -1,0 +1,8 @@
+django
+sentinelsat
+fiona
+rasterio
+shapely
+psycopg2
+gdal
+numeric

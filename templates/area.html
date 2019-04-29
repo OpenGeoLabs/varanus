@@ -1,0 +1,11 @@
+<html>
+    <head><title>Index page of satellite images for area</title></head>
+    <body>
+        <h1>Weeks for area {{ area.name }}</h1>
+        <ul>
+        {% for week in weeks %}
+        <li> <a href="/satellite/{{area.id }}/{{ week.id }}/">{{ week.date }}</a></li>
+        {% endfor %}
+        </ul>
+    </body>
+</html>

@@ -1,0 +1,14 @@
+<html>
+    <head><title>Index page of satellite images for area</title></head>
+    <body>
+        <h1>Files for area {{ area.name }} and week {{ week.date }}</h1>
+        <ul>
+        <li> <a href="/satellite/{{area.id }}/{{ week.id }}/blue">{{ week.blue }}</a></li>
+        <li> <a href="/satellite/{{area.id }}/{{ week.id }}/green">{{ week.green }}</a></li>
+        <li> <a href="/satellite/{{area.id }}/{{ week.id }}/red">{{ week.red }}</a></li>
+        <li> <a href="/satellite/{{area.id }}/{{ week.id }}/nir">{{ week.nir }}</a></li>
+        <li> <a href="/satellite/{{area.id }}/{{ week.id }}/ndvi">{{ week.ndvi }}</a></li>
+        <li> <a href="/satellite/{{area.id }}/{{ week.id }}/ndwi">{{ week.ndwi }}</a></li>
+        </ul>
+    </body>
+</html>

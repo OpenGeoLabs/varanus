@@ -1,0 +1,11 @@
+<html>
+    <head><title>Index page of satellite images</title></head>
+    <body>
+        <h1>Satellite images</h1>
+        <ul>
+        {% for area in areas%}
+        <li> <a href="/satellite/{{ area.id }}/">{{ area.name }}</a></li>
+        {% endfor %}
+        </ul>
+    </body>
+</html>
