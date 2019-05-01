@@ -23,10 +23,22 @@ from shapely.geometry import MultiPolygon
 import fiona.transform
 from osgeo import gdal, ogr
 import rasterio as rio
-from rasterio.windows import Window
 
 sys.path.append("/home/jachym/venvs/lifemonitor/bin/")
 import gdal_merge as gm
+import atexit
+import importlib
+
+import pprint
+
+_TO_BE_CLEANED = []
+
+def _clean():
+    for d in _TO_BE_CLEANED:
+        shutil.rmtree(d)
+
+atexit.register(_clean)
+
 
 PERIOD=6
 
@@ -78,7 +90,6 @@ class Command(BaseCommand):
 
         self.api = SentinelAPI(user, passw, 'https://scihub.copernicus.eu/dhus')
 
-        self.tempdir = tempfile.mkdtemp()
 
         try:
             self.area = Area.objects.get(id=int(area_name))
@@ -97,51 +108,30 @@ class Command(BaseCommand):
         products = self.get_products(starting_date, end_date, self.area,
                                      clouds=clouds)
 
-        print(products)
-        return
-
-        products_bands = {}
-        if len(products):
-            print(products.keys())
-            self.api.download_all(products, tempdir)
-            for product in products:
-                image = self._get_satellite_image(products[product])
-                #for k in products[product]:
-                #    print(k, products[product][k])
-                title = products[product]["title"]
-                frmt = products[product]["format"]
-                filename = products[product]["filename"]
-                zipfname = os.path.join(tempdir, "{}.zip".format(title))
-                with ZipFile(zipfname, 'r') as zipObj:
-                    # Extract all the contents of zip file in current directory
-                    zipObj.extractall(path=tempdir)
-                cutline = area.to_geojson(tempdir)
-
-                target = os.path.join(tempdir, filename)
-
-                clouds = self._get_final_clouds_file(target, cutline)
-
-                bands = self._cut_bands(title, clouds , target)
-                products_bands[target] = bands
-        else:
+        if not len(products.items()):
+            # TODO save empty week maybe?
+            self.stdout.write(
+                self.style.WARNING('There is no data for given time period ' +
+                '<{start}, {end}>, '.format(start=starting_date, end=end_date) +
+                'maximal cloud cover <{cloud}%> and area <{area}>'.format(
+                    area=area_name, cloud=clouds)
+            ))
             return
 
-        whole_bands = {
-            "red": None,
-            "green": None,
-            "blue": None,
-            "nir": None
-        }
+        #self.tempdir = tempfile.mkdtemp(dir="/home/jachym/data/opengeolabs/lifemonitor/")
+        self.tempdir = "/home/jachym/data/opengeolabs/lifemonitor/tmpq8_15z8f/"
 
-        resulting_bands = self._patch_rasters(tempdir, products_bands, whole_bands)
+        #!self.api.download_all(products, self.tempdir)
+        products_data = self.get_bands(products)
+        patched_bands = self._patch_rasters(products_data)
 
-        analysis = self._analyse(tempdir, resulting_bands)
+        analysed_data = self._analyse(patched_bands)
 
-        mydate = str(mydate)
-        week_date = datetime.date(int(mydate[0:4]), int(mydate[4:6]), int(mydate[6:8]))
-        if Week.objects.filter(date=week_date, area=area).count() == 0:
+        pprint.pprint(analysed_data)
+        raise Exception("###x")
+        if Week.objects.filter(date=starting_date, area=area).count() == 0:
             week = Week(
-                date=week_date,
+                date=starting_date,
                 area=area,
             )
             #week.red = GDALRaster(resulting_bands["red"], write=True)
@@ -174,10 +164,8 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS('Successfully create data for week {}'.format(week.week)))
 
-        shutil.rmtree(tempdir)
 
-
-    def _get_satellite_image(self, product):
+    def save_satellite_image(self, product):
         kwargs = copy.deepcopy(product)
         kwargs.pop("highprobacloudspercentage")
         kwargs.pop("notvegetatedpercentage")
@@ -202,68 +190,65 @@ class Command(BaseCommand):
         return img
 
 
-    def _analyse(self, tempdir, bands):
+    def _analyse(self, bands):
+        """Perform required analysis for given area
 
-        if not os.path.isdir(os.path.join(tempdir, "indexes")):
-            os.mkdir(os.path.join(tempdir, "indexes"))
-        out_ndvi = os.path.join(tempdir, "indexes", "ndvi.tiff")
-        out_ndwi = os.path.join(tempdir, "indexes", "ndwi.tiff")
 
-        with rio.open(bands["red"]) as red:
-            with rio.open(bands["nir"]) as nir:
-                with rio.open(bands["green"]) as green:
-                    step = int(red.width/5)
-                    kwargs = copy.deepcopy(red.meta)
-                    kwargs.update(dtype=rio.float64, count=1, compress='lzw')
-                    with rio.open(out_ndvi, "w", **kwargs) as outndvi:
-                        with rio.open(out_ndwi, "w", **kwargs) as outndwi:
-                            slices = [(col_start, row_start, step, step) \
-                                for col_start in list(range(0, red.width, step)) \
-                                for row_start in list(range(0, red.height, step))
-                            ]
-                            for slc in slices:
-                                win = Window(*slc)
+        :param bands: dict will all available raster bands
+        :return: dict with resulting analysis each analysis should have raster,
+        image, vector keys
+        """
 
-                                nir_data = nir.read(1, window=win).astype(float)
-                                vis_data = red.read(1, window=win).astype(float)
-                                green_data = green.read(1, window=win).astype(float)
+        data = {}
+        for analysis in ["ndvi", "ndwi"]: # self.area.characteristics:
+            mod_analysis = importlib.import_module("varanus.methods.{}".format(analysis))
+            data[analysis] = mod_analysis.analyse(bands, self.tempdir)
 
-                                ndvi = (nir_data - vis_data) / (nir_data + vis_data)
-                                ndwi = (green_data - nir_data) / (green_data + nir_data)
-
-                                write_win = Window(slc[0], slc[1], ndvi.shape[1], ndvi.shape[0])
-
-                                outndvi.write_band(1, ndvi.astype(rio.float64), window=write_win)
-                                outndwi.write_band(1, ndwi.astype(rio.float64), window=write_win)
-
-        self.stdout.write(self.style.WARNING("Raster IO should use windowed style of reading and writing"))
-
-        return [out_ndvi, out_ndwi]
+        return data
 
 
 
-    def _patch_rasters(self, tempdir, products_bands, whole_bands):
+    def _patch_rasters(self, products_data):
+        """Patch bands together from more products
 
-        target_dir = os.path.join(tempdir, "merged")
+        :param products_data: dict {product: {band: file_name}}
+
+        :return: dict {band: file_name}
+        """
+
+        target_dir = os.path.join(self.tempdir, self.area.name, "merged")
         if not os.path.isdir(target_dir):
-            os.mkdir(target_dir)
+            os.makedirs(target_dir)
 
-        for color in  ("red", "green", "blue", "nir"):
-            inputs = []
-            for target in products_bands:
-                inputs.append(os.path.join(target, "area", products_bands[target][color]))
+        products = products_data.keys()
 
-            output = os.path.join(target_dir, "{}.tif".format(color))
+        data = {}
+        for band in products_data[list(products)[0]].keys():
+            input_files = []
+
+            for product in products_data:
+                input_files.append(products_data[product][band])
+
+            output = os.path.join(target_dir, "{}.tif".format(band))
 
             merge_command = ["-n", "0", "-a_nodata", "0", "-o", output, "-co", 
-                                "COMPRESS=DEFLATE"  ] + inputs
+                                "COMPRESS=DEFLATE"  ] + input_files
             gm.main(merge_command)
 
-            whole_bands[color] = output
-        return whole_bands
+            data[band] = output
+        return data
 
 
-    def _get_final_clouds_file(self, target, cutline):
+    def _get_final_cutline(self, target, cutline, crs):
+        """
+        Get final cutline based on input cutline and cloud mask
+
+        :param target: name of target working directory
+        :param cultine: geojson file name with input cutline
+        :param crs: EPSG:CODE cutline's coordinate reference system
+
+        :return: file name with resulting cutline
+        """
 
         granule = os.path.join(target, "GRANULE")
         qi_data = os.path.join(granule, os.listdir(granule)[0], "QI_DATA")
@@ -285,8 +270,7 @@ class Command(BaseCommand):
 
         cloud_vectors = unary_union(cloud_vectors)
         cloud_vectors = fiona.transform.transform_geom(
-            "EPSG:3263", "EPSG:4326", mapping(cloud_vectors))
-        self.stdout.write(self.style.WARNING('Using default EPSG:3263 for clouds'))
+            crs, "EPSG:4326", mapping(cloud_vectors))
 
         cutline_features = []
         with fiona.open(cutline) as cutline:
@@ -307,40 +291,85 @@ class Command(BaseCommand):
             json.dump(data, out)
         return target_file
 
-    def _cut_bands(self, title, cutline, target):
+    def _get_all_band_files(self, target):
+        """Create list of all available band files for given product target
+        directory
 
-        file_names = "{}_{}".format(title.split("_")[5], title.split("_")[2])
+        resulting data structure:
+
+            ```
+            {
+                "res10m": {
+                    "B01": "/path/to/file.jp2",
+                    "B02": ...
+                },
+                "res20m": {
+                    ...
+                },
+                ...
+            }
+            ```
+
+        :return: data structure
+        """
+
+        data = {}
         granule = os.path.join(target, "GRANULE")
-        img_data = os.path.join(granule, os.listdir(granule)[0], "IMG_DATA",
-                                "R10m")
-        data = os.listdir(img_data)
+        granule_name = os.listdir(granule)[0]
 
-        bandnames = {
-            "blue": "{}_B02_10m.jp2".format(file_names),
-            "green": "{}_B03_10m.jp2".format(file_names),
-            "red": "{}_B04_10m.jp2".format(file_names),
-            "nir": "{}_B08_10m.jp2".format(file_names),
-        }
+        resolutions = os.listdir(
+            os.path.join(granule, granule_name, "IMG_DATA")
+        )
 
 
-        area_dir = os.path.join(target, "area")
+        for res in resolutions:
+            data[res] = {}
+            images = os.listdir(
+                os.path.join(granule, granule_name, "IMG_DATA", res))
+            for image in images:
+                band_name = image.split("_")[2]
+                data[res][band_name] = os.path.join(granule, granule_name,
+                                                    "IMG_DATA", res, image)
+
+        return data
+
+
+    def _cut_bands(self, bands, cutline, target):
+        """Cut area of interest based on given cutline
+
+        :param bands: data structure of all bands as returned by
+            _get_all_band_files
+        :param cutline: filename of required cutline
+        :param target: directory, where the resulting data should be uploaded
+            to
+
+        :return: same structure as input `bands`, but with cut raster files
+        """
+
+        area_dir = os.path.join(target, self.area.name)
         if not os.path.isdir(area_dir):
             os.mkdir(area_dir)
-        for color in bandnames:
-            print("warping", bandnames[color])
-            gdal.Warp(
-                os.path.join(target, "area", bandnames[color]),
-                os.path.join(img_data, bandnames[color]),
-                dstSRS="+init=epsg:4326",
-                cropToCutline=True,
-                resampleAlg="near",
-                format="GTiff",
-                cutlineDSName=cutline,
-                dstNodata=0,
-                creationOptions=["COMPRESS=DEFLATE"]
-            )
 
-        return bandnames
+        data = {}
+        for res in bands:
+            for band in bands[res]:
+
+                new_file = os.path.join(area_dir, "{}.jp2".format(band))
+                gdal.Warp(
+                    new_file,
+                    os.path.join(bands[res][band]),
+                    dstSRS="+init=epsg:4326",
+                    cropToCutline=True,
+                    resampleAlg="near",
+                    format="GTiff",
+                    cutlineDSName=cutline,
+                    dstNodata=0,
+                    creationOptions=["COMPRESS=DEFLATE"]
+                )
+
+                data[band] = new_file
+
+        return data
 
 
     def _get_dates(self, year=None, week=None, date=None):
@@ -380,6 +409,51 @@ class Command(BaseCommand):
            end_date = start_date+last_day_in_week
 
         return(start_date, end_date, week)
+
+    def get_bands(self, products):
+        """
+        Get dict with raster bands from downloaded Sentinel products
+
+        :param products: list of products
+        :return: dict of raster files for each band
+        """
+
+        data = {}
+        for pid in products:
+            product = products[pid]
+
+            self.save_satellite_image(product)
+
+            title = product["title"]
+            filename = product["filename"]
+            zipfname = os.path.join(self.tempdir, "{}.zip".format(title))
+
+            #!with ZipFile(zipfname, 'r') as zipObj:
+            #!    zipObj.extractall(path=self.tempdir)
+
+            cutline = self.area.to_geojson_file(self.tempdir)
+
+            product_dir = os.path.join(self.tempdir, filename)
+
+            all_bands = self._get_all_band_files(product_dir)
+            crs = self._get_crs_from_band(all_bands["R10m"]["B02"])
+
+            clouds_cutline = self._get_final_cutline(product_dir, cutline, crs)
+
+            bands = self._cut_bands(all_bands, clouds_cutline, product_dir)
+            data[product_dir] = bands
+
+        return data
+
+    def _get_crs_from_band(self, raster):
+        """Get  EPSG:CODE text string based on input raster file
+
+        :param raster: full file name
+        :return: crs "EPSG:<CODE>" text string
+        """
+
+        with rio.open(raster) as r:
+            return "EPSG:{code}".format(code=r.read_crs().to_epsg())
 
 
     def get_products(self, start_date, end_date, area, clouds=100):

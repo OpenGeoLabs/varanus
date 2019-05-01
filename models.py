@@ -122,11 +122,11 @@ class Area(models.Model):
     name = models.CharField(max_length=20)
 
 
-    def to_geojson(self, target=None):
-        if not target:
-            target = tempfile.mkdtemp()
+    def to_geojson_file(self, target_dir=None):
+        if not target_dir:
+            target_dir = tempfile.mkdtemp()
 
-        target_file = "{}.geojson".format(os.path.join(target, self.name))
+        target_file = "{}.geojson".format(os.path.join(target_dir, self.name))
         with open(target_file, "w") as out:
             data = {
                 "type":"FeatureCollection",
