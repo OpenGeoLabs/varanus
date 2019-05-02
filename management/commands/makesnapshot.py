@@ -2,7 +2,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.contrib.gis.gdal import GDALRaster
 from django.core.files import File
 
-from varanus.models import SatelliteImage,  Area, Week
+from varanus.models import SatelliteImage,  Area, Week, Analysis, AnalysisType
 
 from sentinelsat.sentinel import SentinelAPI, read_geojson, geojson_to_wkt
 
@@ -24,7 +24,6 @@ import fiona.transform
 from osgeo import gdal, ogr
 import rasterio as rio
 
-sys.path.append("/home/jachym/venvs/lifemonitor/bin/")
 import gdal_merge as gm
 import atexit
 import importlib
@@ -119,48 +118,61 @@ class Command(BaseCommand):
             return
 
         #self.tempdir = tempfile.mkdtemp(dir="/home/jachym/data/opengeolabs/lifemonitor/")
-        self.tempdir = "/home/jachym/data/opengeolabs/lifemonitor/tmpq8_15z8f/"
+        #!self.tempdir = "/home/jachym/data/opengeolabs/lifemonitor/tmpq8_15z8f/"
+        self.tempdir = tempfile.mkdtemp()
+        _TO_BE_CLEANED.append(self.tempdir)
 
-        #!self.api.download_all(products, self.tempdir)
+
+        self.api.download_all(products, self.tempdir)
         products_data = self.get_bands(products)
         patched_bands = self._patch_rasters(products_data)
 
         analysed_data = self._analyse(patched_bands)
 
-        pprint.pprint(analysed_data)
-        raise Exception("###x")
-        if Week.objects.filter(date=starting_date, area=area).count() == 0:
+        if Week.objects.filter(date=starting_date, area=self.area).count() == 0:
             week = Week(
                 date=starting_date,
-                area=area,
+                area=self.area,
             )
-            #week.red = GDALRaster(resulting_bands["red"], write=True)
-            #week.save()
-            #week.green = GDALRaster(resulting_bands["green"], write=True)
-            #week.save()
-            #week.blue = GDALRaster(resulting_bands["blue"], write=True)
-            #week.save()
-            #week.nir = GDALRaster(resulting_bands["nir"], write=True)
-            #week.save()
-            #week.ndvi = GDALRaster(analysis[0], write=True)
-            #week.save()
-            #week.ndwi = GDALRaster(analysis[1], write=True)
-            #week.save()
-            week.red.save(os.path.basename(resulting_bands["red"]),
-                          File(open(resulting_bands["red"], "rb")), save=True)
-            week.green.save(os.path.basename(resulting_bands["green"]),
-                          File(open(resulting_bands["green"], "rb")), save=True)
-            week.blue.save(os.path.basename(resulting_bands["blue"]),
-                          File(open(resulting_bands["blue"], "rb")), save=True)
-            week.nir.save(os.path.basename(resulting_bands["nir"]),
-                          File(open(resulting_bands["nir"], "rb")), save=True)
-            week.ndvi.save(os.path.basename(analysis[0]),
-                          File(open(analysis[0], "rb")), save=True)
-            week.ndwi.save(os.path.basename(analysis[1]),
-                          File(open(analysis[1], "rb")), save=True)
-            week.save()
         else:
-            week = Week.objects.get(date=week_date, area=area)
+            week = Week.objects.get(date=starting_date, area=self.area)
+
+        week.cutline = self.cutline_geom.wkt
+        for band in patched_bands:
+            band_key = band.lower()
+            eval("week.{}".format(band_key)).save(
+                os.path.basename(patched_bands[band]),
+                File(open(patched_bands[band], "rb")), save=True)
+        week.save()
+
+        for an in analysed_data:
+            at = AnalysisType.objects.get(name=an)
+            if Analysis.objects.filter(week=week, type=at).count() == 0:
+                analysis = Analysis(week=week, type=at)
+            else:
+                analysis = Analysis.objects.get(week=week, type=at)
+
+            if analysed_data[an]["raster"]:
+                analysis.raster.save(
+                        os.path.basename(analysed_data[an]["raster"]),
+                        File(open(analysed_data[an]["raster"], "rb")),
+                        save=True)
+
+            if analysed_data[an]["image"]:
+                analysis.image.save(
+                        os.path.basename(analysed_data[an]["image"]),
+                        File(open(analysed_data[an]["image"], "rb")),
+                        save=True)
+
+            if analysed_data[an]["vector"]:
+                analysis.vector.save(
+                        os.path.basename(analysed_data[an]["vector"]),
+                        File(open(analysed_data[an]["vector"], "rb")),
+                        save=True)
+
+            analysis.save()
+
+
 
         self.stdout.write(self.style.SUCCESS('Successfully create data for week {}'.format(week.week)))
 
@@ -279,6 +291,9 @@ class Command(BaseCommand):
         cutline_features = unary_union(cutline_features)
 
         final_cutline = cutline_features.difference(shape(cloud_vectors))
+        if final_cutline.type == "Polygon":
+            final_cutline = MultiPolygon([final_cutline])
+        self.cutline_geom = final_cutline
 
         target_file = "{}.geojson".format(os.path.join(target, "cloud_cutline"))
         with open(target_file, "w") as out:
@@ -385,13 +400,13 @@ class Command(BaseCommand):
         start_date = None
         end_date = None
 
-        date = int(date)
-        if date < 10000000:
-                self.stdout.write(
-                    self.style.ERROR('Date <{}> is not in required format YYYYMMDD'.format(date)))
-                sys.exit(1)
 
         if date:
+            date = int(date)
+            if date < 10000000:
+                    self.stdout.write(
+                        self.style.ERROR('Date <{}> is not in required format YYYYMMDD'.format(date)))
+                    sys.exit(1)
             year = date//10000
             month = (date - (year*10000))//100
             day = (date - year*10000 - month*100)
@@ -428,8 +443,8 @@ class Command(BaseCommand):
             filename = product["filename"]
             zipfname = os.path.join(self.tempdir, "{}.zip".format(title))
 
-            #!with ZipFile(zipfname, 'r') as zipObj:
-            #!    zipObj.extractall(path=self.tempdir)
+            with ZipFile(zipfname, 'r') as zipObj:
+                zipObj.extractall(path=self.tempdir)
 
             cutline = self.area.to_geojson_file(self.tempdir)
 

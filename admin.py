@@ -12,7 +12,7 @@ class ProductAdmin(admin.ModelAdmin):
     list_display = ("title", "footprint")
 
 class WeekAdmin(admin.ModelAdmin):
-    list_display = ("name", "week", "blue", "green", "red", "nir", "ndvi", "ndwi")
+    list_display = ("name", "week")
 
     def name(self, item):
         return str(item)
@@ -31,3 +31,5 @@ class WeekAdmin(admin.ModelAdmin):
 admin.site.register(SatelliteImage, ProductAdmin)
 admin.site.register(Area, AreaAdmin)
 admin.site.register(Week, WeekAdmin)
+admin.site.register(AnalysisType)
+admin.site.register(Analysis)

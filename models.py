@@ -4,7 +4,10 @@ import json
 import os
 import datetime
 from django.conf import settings
+from . import methods
 
+def call_upload_to(instance, filename):
+    return instance.upload_to(filename)
 
 class SatelliteImage(models.Model):
 
@@ -49,34 +52,40 @@ class SatelliteImage(models.Model):
     def __str__(self):
         return self.title
 
+
 def call_week_upload_to(instance, filename):
     return instance.upload_to(filename)
+
 
 class Week(models.Model):
     date = models.DateField(help_text="First day of the week")
     area = models.ForeignKey("Area", on_delete=models.CASCADE)
     satellite_image = models.ManyToManyField("SatelliteImage")
 
-    # data are too big to be stored in the database
-    #red = models.RasterField(blank=True)
-    #green = models.RasterField(blank=True)
-    #blue = models.RasterField(blank=True)
-    #nir = models.RasterField(blank=True)
-    #ndvi = models.RasterField(blank=True)
-    #ndwi = models.RasterField(blank=True)
+    aot = models.FileField(upload_to=call_week_upload_to)
+    b01 = models.FileField(upload_to=call_week_upload_to)
+    b02 = models.FileField(upload_to=call_week_upload_to)
+    b03 = models.FileField(upload_to=call_week_upload_to)
+    b04 = models.FileField(upload_to=call_week_upload_to)
+    b05 = models.FileField(upload_to=call_week_upload_to)
+    b06 = models.FileField(upload_to=call_week_upload_to)
+    b07 = models.FileField(upload_to=call_week_upload_to)
+    b08 = models.FileField(upload_to=call_week_upload_to)
+    b09 = models.FileField(upload_to=call_week_upload_to)
+    b11 = models.FileField(upload_to=call_week_upload_to)
+    b12 = models.FileField(upload_to=call_week_upload_to)
+    b8a = models.FileField(upload_to=call_week_upload_to)
+    scl = models.FileField(upload_to=call_week_upload_to)
+    tci = models.FileField(upload_to=call_week_upload_to)
+    wvp = models.FileField(upload_to=call_week_upload_to)
 
-    red = models.FileField(upload_to=call_week_upload_to)
-    green = models.FileField(upload_to=call_week_upload_to)
-    blue = models.FileField(upload_to=call_week_upload_to)
-    nir = models.FileField(upload_to=call_week_upload_to)
-    ndvi = models.FileField(upload_to=call_week_upload_to)
-    ndwi = models.FileField(upload_to=call_week_upload_to)
+    cutline = models.MultiPolygonField()
 
     def upload_to(self, filename):
 
-        target = os.path.join(settings.MEDIA_ROOT, "varanus", "week", 
-                              "{}-{}".format(self.date.year), str(self.week))
-        os.mkdirs(target, exist_ok=True)
+        target = os.path.join(settings.MEDIA_ROOT, "varanus", "week",
+                              "{}-{}".format(self.date.year, str(self.week)))
+        os.makedirs(target, exist_ok=True)
 
         return os.path.join("varanus", "week", str(self.week), filename)
 
@@ -121,7 +130,6 @@ class Area(models.Model):
     area = models.PolygonField()
     name = models.CharField(max_length=20)
 
-
     def to_geojson_file(self, target_dir=None):
         if not target_dir:
             target_dir = tempfile.mkdtemp()
@@ -138,7 +146,49 @@ class Area(models.Model):
             json.dump(data, out)
         return target_file
 
+    def __str__(self):
+        return self.name
 
+
+class AnalysisType(models.Model):
+
+    TYPES = map(lambda m: (m, m), methods.__all__)
+
+    name = models.CharField(max_length=20, choices=TYPES)
+    description = models.TextField(blank=True)
 
     def __str__(self):
         return self.name
+
+
+def call_upload_to_dir(instance, filename):
+    return instance.upload_to_dir(filename)
+
+
+class Analysis(models.Model):
+
+    type = models.ForeignKey("AnalysisType", on_delete=models.PROTECT)
+    week = models.ForeignKey("Week", on_delete=models.PROTECT)
+
+    raster = models.FileField(help_text="Raster data", blank=True,
+                              upload_to=call_upload_to)
+    vector = models.FileField(help_text="Vector data", blank=True,
+                              upload_to=call_upload_to)
+    image = models.FileField(help_text="Image representation", blank=True,
+                             upload_to=call_upload_to)
+    tiles = models.CharField(help_text="Dir to tiled data", blank=True,
+                             max_length=256)
+
+    def upload_to(self, filename):
+
+        target = os.path.join(settings.MEDIA_ROOT, "varanus", "week",
+                              "{}-{}".format(self.week.date.year,
+                                             str(self.week.week)))
+        os.makedirs(target, exist_ok=True)
+
+        return os.path.join("varanus", "week", str(self.week), filename)
+
+    def __str__(self):
+        return "{year}-{week} {area} {type}".format(
+            year=self.week.date.year, week=self.week.week,
+            area=self.week.area.name, type=self.type.name)

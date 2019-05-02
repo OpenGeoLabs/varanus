@@ -6,7 +6,7 @@ from rasterio.windows import Window
 
 
 def analyse(bands, target_dir=None):
-    """Create NDVI index
+    """NDVI index
     """
 
     raster_out = os.path.join(target_dir, "ndvi.tif")
